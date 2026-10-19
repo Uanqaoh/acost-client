@@ -107,8 +107,8 @@ def toronto_now():
             pass
     # Minimal Linux installs sometimes omit the IANA timezone database. UTC is
     # an explicit, documented fallback rather than guessing EST/EDT offsets.
-    print("提示：系统缺少 America/Toronto 时区数据，默认日期使用 UTC；"
-          "可显式提供 --date，或安装系统 tzdata。", file=sys.stderr)
+    print("提示：系统缺少 America/Toronto 时区数据，默认日期和时间使用 UTC；"
+          "可显式提供 --date 和 --time，或安装系统 tzdata。", file=sys.stderr)
     return dt.datetime.now(dt.timezone.utc)
 
 
@@ -157,6 +157,8 @@ def validate_payload(payload, *, creating=False, refund=False):
 def command_payload(args):
     fields = ("amount", "date", "time", "merchant", "note", "category", "account",
               "to_account", "receipt_url", "type")
+    if args.command in ("add", "refund") and args.unknown_time:
+        raise LedgerError("新增和退款不能把时间留空。小票上有时间就用 --time；没有就省略，程序会写入多伦多当前时间。")
     if args.json:
         conflicts = [name for name in fields if getattr(args, name, None) is not None]
         if args.unknown_time:
@@ -169,8 +171,10 @@ def command_payload(args):
         if args.command in ("add", "refund"):
             if args.amount is None:
                 raise LedgerError("请提供 --amount，或使用 --json 输入 amount_cents。")
-            payload["date"] = args.date or toronto_now().strftime("%Y-%m-%d")
-            payload["time"] = args.time
+            if args.date is None or args.time is None:
+                now = toronto_now()
+                payload["date"] = args.date or now.strftime("%Y-%m-%d")
+                payload["time"] = args.time or now.strftime("%H:%M")
         for field in fields:
             value = getattr(args, field, None)
             if value is not None:
@@ -195,9 +199,12 @@ def command_payload(args):
                 and payload["duplicate_acknowledgements"] != acknowledged):
             raise LedgerError("--acknowledge-duplicate 与 JSON 中的 duplicate_acknowledgements 不一致。")
         payload["duplicate_acknowledgements"] = acknowledged
-    if args.command in ("add", "refund"):
-        payload.setdefault("time", None)
-    elif "duplicate_acknowledgements" in payload:
+    if args.command in ("add", "refund") and payload.get("time") is None:
+        now = toronto_now()
+        payload["time"] = now.strftime("%H:%M")
+        if not payload.get("date"):
+            payload["date"] = now.strftime("%Y-%m-%d")
+    if args.command not in ("add", "refund") and "duplicate_acknowledgements" in payload:
         raise LedgerError("duplicate_acknowledgements 仅用于新增或退款。")
     if args.command == "edit" and not payload:
         raise LedgerError("请至少提供一个要修改的字段。")
@@ -388,8 +395,8 @@ def add_payload_options(parser, *, refund=False, editing=False):
     parser.add_argument("--currency", choices=("CAD",), help="目前只支持 CAD")
     parser.add_argument("--date", help="YYYY-MM-DD；添加/退款默认多伦多当天")
     time_options = parser.add_mutually_exclusive_group()
-    time_options.add_argument("--time", help="实际时间 HH:MM；添加/退款省略时标记为时间未记录")
-    time_options.add_argument("--unknown-time", action="store_true", help="明确将时间标记为未记录；编辑时可清除占位时间")
+    time_options.add_argument("--time", help="实际时间 HH:MM；小票上的时间优先，添加/退款省略时使用多伦多当前时间")
+    time_options.add_argument("--unknown-time", action="store_true", help="仅编辑时可用，会清空时间；新增和退款不要使用")
     parser.add_argument("--note", help="备注")
     parser.add_argument("--key", help="稳定去重键；重试同笔录入必须使用相同键")
     if not editing:
