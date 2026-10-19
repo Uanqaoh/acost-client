@@ -1,0 +1,9 @@
+grok.json
+admin.json
+viewer.json
+mac.json
+.env
+.env.*
+*.zip
+*.sqlite
+*.sqlite3
